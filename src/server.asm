@@ -1,8 +1,6 @@
 format ELF64
 public _start
 
-BUF_LEN=1024
-
 STDERR        =  2
 
 SYS_read      =  0
@@ -11,6 +9,8 @@ SYS_close     =  3
 SYS_open      =  2
 SYS_socket    = 41
 SYS_accept    = 43
+SYS_bind      = 49
+SYS_listen    = 50
 SYS_setsockopt= 54
 SYS_exit      = 60
 
@@ -19,16 +19,10 @@ SOL_SOCKET    =  1
 AF_INET       =  2
 SOCK_STREAM   =  1
 PROTOCOL      =  0
-TRUE          =  1
-SYS_bind      = 49
-bind_length   = 16
-SYS_listen    =    50
-listen_length =  0x0A
+;bind_length   = 16
+listen_length =0x0A
 
 O_RDONLY      =  0x00
-
-EADDRINUSE    =   -98
-TRUE          =  0x01
 
 section '.text' executable
 _start:
@@ -65,7 +59,7 @@ _start:
         .read_request:
                 mov di,[client]
                 mov rsi,client.addr       
-                mov edx, BUF_LEN      
+                mov edx,[client.len]      
                 call _read
                 mov [request.len], eax
         .prepare_response:
@@ -76,7 +70,7 @@ _start:
         .read_response:
                 mov edi,[responsefd]
                 mov rsi,response
-                mov edx,BUF_LEN  
+                mov edx,[response.maxlen]
                 call _read
                 cmp eax,0x0
                 je .cleanup
@@ -284,10 +278,12 @@ client:
 ;; Request
 request:
         rd 1024
+        .maxlen dd 1024
         .len dd 2
 ;; Response
 responsefd rd 2
 response:
         rd 1024
+        .maxlen dd 1024
         .len rd 2
         .path db 'index.html',0
