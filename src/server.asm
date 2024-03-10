@@ -41,15 +41,6 @@ _start:
         mov    rdx,PROTOCOL  
         call _socket ;; We make the socket
 
-        mov di,[socket]
-        mov esi,SOL_SOCKET
-        mov edx,SO_REUSEADDR
-        mov r8d,4
-        mov r10d,socket.opts
-        mov eax,SYS_setsockopt ;; Configure the address as reusable
-        syscall
-        cmp eax, 0x0
-        jl _fail
         call _bind ;; We bind the socket
         mov    esi,listen_length
         mov    eax,SYS_listen
@@ -87,7 +78,7 @@ _start:
         .drop_client:
                 mov di,[client]
                 cmp edi,0x0
-                je _exit
+                je .cleanup
                 call _close
                 mov word[client],0
                 jmp .mainloop
@@ -176,6 +167,15 @@ _socket: ; Makes socket, DI : Type, SI : Sockettype, DX : protocol -> AX : fd
         cmp eax, 0x0
         jl .fail
         mov [socket],ax
+        mov di, [socket]
+        mov esi,SOL_SOCKET
+        mov edx,SO_REUSEADDR
+        mov r8d,4
+        mov r10d,socket.opts
+        mov eax,SYS_setsockopt
+        syscall
+        cmp eax,0x0
+        jl .fail
         mov rsp,rbp
         pop rbp
         ret
