@@ -36,62 +36,75 @@ _start:
         xor   rdx,rdx
         xor   r15,r15
 
-        mov    rdi,AF_INET  
         mov    rsi,SOCK_STREAM
         mov    rdx,PROTOCOL  
-        call _socket ;; We make the socket
-
-        call _bind ;; We bind the socket
-        mov    esi,listen_length
+        push .bind
+        jmp _socket
+        ;call _socket ;; We make the socket
+.bind:  push .listen
+        jmp _bind ;; We bind the socket
+.listen:mov    esi,listen_length
         mov    eax,SYS_listen
-        call _listen
-        .mainloop: ;; We enter the main loop
-                call _accept
+        push .mainloop
+        jmp _listen
+.mainloop: ;; We enter the main loop
+        push .read_request
+        jmp _accept
         .read_request:
                 mov di,[client]
                 mov rsi,client.addr       
                 mov edx,[client.len]      
-                call _read
-                mov [request.len], eax
+                push .prepare_response
+                jmp _read
         .prepare_response:
+                mov [request.len], eax
                 mov edi,response.path
                 mov esi,O_RDONLY
-                call _open
-                mov [responsefd],eax
+                push .read_response
+                jmp _open
         .read_response:
-                mov edi,[responsefd]
+                mov [response.fd],eax
+                mov edi,[response.fd]
                 mov rsi,response
                 mov edx,[response.maxlen]
-                call _read
+                push .write_response
+                jmp _read
+        .write_response:
                 cmp eax,0x0
                 je .cleanup
                 mov [response.len], eax
-        .write_response:
                 mov edi,[client]
                 mov rsi,response
                 mov edx,[response.len]
-                call _write
+                push .close_response
+                jmp _write
         .close_response:
-                mov edi,[responsefd]
-                call _close
-                mov [responsefd],0
+                mov edi,[response.fd]
+                push .drop_client
+                jmp _close
         .drop_client:
+                mov [response.fd],0
                 mov di,[client]
                 cmp edi,0x0
                 je .cleanup
-                call _close
+                push .clear_client
+                jmp _close
+        .clear_client:
                 mov word[client],0
                 jmp .mainloop
 .cleanup: 
         mov di,[socket]
         cmp edi,0x0
         je .client_clean
-        call _close
+        push .client_clean
+        jmp _close
 .client_clean:
         mov di,[client]
         cmp edi,0x0
         je _exit
-        call _close
+        push .clear_exit_code
+        jmp _close
+.clear_exit_code:
         mov rbx, 0
         jmp _exit
 .error: mov rbx, rax
@@ -99,7 +112,18 @@ _start:
 
 
 ;; Function defs
-_read:  ; Reads DI, into buffer SI (EDX bytes)
+_read:  mov eax,SYS_read
+        syscall
+        cmp eax, 0x0
+        jl .fail
+        pop rbx
+        jmp rbx
+.fail:  mov  rsi,.message
+        mov  rdx,.length
+        jmp _fail
+        .message: db 'Read failed',0
+        .length : dd $-.message
+fn_read:  ; Reads DI, into buffer SI (EDX bytes)
         push rbp
         mov rbp,rsp
         mov eax,SYS_read
@@ -114,7 +138,20 @@ _read:  ; Reads DI, into buffer SI (EDX bytes)
         jmp _fail
         .message: db 'Read failed',0
         .length : dd $-.message
-_write: ; Writes to DI, from buffer SI
+_write: ; Push the returnaddress
+        mov eax,SYS_write
+        syscall
+        cmp eax, 0x0
+        jl .fail
+        pop rbx
+        jmp rbx
+.fail:  mov rsi,.message
+        mov rdx,.length
+        jmp _fail
+        .message: db 'Write failed',0
+        .length : dd $-.message
+        
+fn_write: ; Writes to DI, from buffer SI
         push rbp
         mov rbp,rsp
         mov eax,SYS_write
@@ -130,6 +167,18 @@ _write: ; Writes to DI, from buffer SI
         .message: db 'Write failed',0
         .length : dd $-.message
 _open:  ; Opens DI, with flags in SI
+        mov eax,SYS_open
+        syscall
+        cmp eax, 0x0
+        jl .fail
+        pop rbx
+        jmp rbx
+.fail:  mov rsi,.message
+        mov rdx,.length
+        jmp _fail
+        .message: db 'Open failed',0
+        .length : dd $-.message
+fn_open:  ; Opens DI, with flags in SI
         push rbp
         mov rbp,rsp
         mov eax,SYS_open
@@ -145,6 +194,18 @@ _open:  ; Opens DI, with flags in SI
         .message: db 'Open failed',0
         .length : dd $-.message
 _close: ; Closes the FD in DI
+        mov eax,SYS_close
+        syscall
+        cmp eax, 0x0
+        jl .fail
+        pop rbx
+        jmp rbx
+.fail:  mov rsi,.message
+        mov rdx,.length
+        jmp _fail
+        .message: db 'Close failed',0
+        .length : dd $-.message
+fn_close: ; Closes the FD in DI
         push rbp
         mov rbp,rsp
         mov eax,SYS_close
@@ -159,15 +220,39 @@ _close: ; Closes the FD in DI
         jmp _fail
         .message: db 'Close failed',0
         .length : dd $-.message
-_socket: ; Makes socket, DI : Type, SI : Sockettype, DX : protocol -> AX : fd
-        push rbp
-        mov rbp,rsp
+_socket: ; Makes socket, DI : family, SI : Sockettype, DX : protocol -> AX : fd
+        mov di,[socket.addr] ; The sa_family_t of the socket
         mov eax,SYS_socket       
         syscall              
         cmp eax, 0x0
         jl .fail
         mov [socket],ax
-        mov di, [socket]
+        mov di,[socket]
+        mov esi,SOL_SOCKET
+        mov edx,SO_REUSEADDR
+        mov r8d,4
+        mov r10d,socket.opts
+        mov eax,SYS_setsockopt
+        syscall
+        cmp eax,0x0
+        jl .fail
+        pop rbx
+        jmp rbx
+.fail:  mov rsi,.message
+        mov rdx,.length
+        jmp _fail
+        .message: db 'Socket failed',0
+        .length:  dd $-.message
+fn_socket: ; Makes socket, DI : family, SI : Sockettype, DX : protocol -> AX : fd
+        push rbp
+        mov rbp,rsp
+        mov di,[socket.addr] ; The sa_family_t of the socket
+        mov eax,SYS_socket       
+        syscall              
+        cmp eax, 0x0
+        jl .fail
+        mov [socket],ax
+        mov di,[socket]
         mov esi,SOL_SOCKET
         mov edx,SO_REUSEADDR
         mov r8d,4
@@ -185,6 +270,22 @@ _socket: ; Makes socket, DI : Type, SI : Sockettype, DX : protocol -> AX : fd
         .message: db 'Socket failed',0
         .length:  dd $-.message
 _bind:
+        mov di,[socket]
+        mov esi,socket.addr  
+        mov edx,[socket.len]
+        mov eax,SYS_bind
+        syscall
+        cmp eax, 0x0
+        jl .fail
+        mov [client],di
+        pop rbx
+        jmp rbx
+.fail:  mov rsi,.message
+        mov rdx,.length
+        jmp _fail
+        .message: db 'Bind failed',0
+        .length:  dd $-.message
+fn_bind:
         push rbp
         mov rbp,rsp
         mov di,[socket]
@@ -204,6 +305,22 @@ _bind:
         .message: db 'Bind failed',0
         .length:  dd $-.message
 _accept: ; DI : fd, SI : Address-write-buffer, DX : buffer-length
+        mov di,[socket]
+        mov rsi,client.addr
+        mov rdx,client.len
+        mov eax,SYS_accept
+        syscall
+        cmp eax, 0x0
+        jl .fail
+        mov [client],ax
+        pop rbx
+        jmp rbx
+.fail:  mov  rsi,.message
+        mov  rdx,.length
+        jmp  _fail
+        .message: db 'Accept failed',0
+        .length:  dd $-.message
+fn_accept: ; DI : fd, SI : Address-write-buffer, DX : buffer-length
         push rbp
         mov rbp,rsp
         mov di,[socket]
@@ -223,6 +340,19 @@ _accept: ; DI : fd, SI : Address-write-buffer, DX : buffer-length
         .message: db 'Accept failed',0
         .length:  dd $-.message
 _listen:
+        mov di,[socket]
+        mov eax,SYS_listen
+        syscall
+        cmp rax,                  0x0
+        jl .fail
+        pop rbx
+        jmp rbx
+.fail:  mov rsi,.message
+        mov rdx,.length
+        jmp _fail
+        .message: db 'Listen failed',0
+        .length:  dd $-.message
+fn_listen:
         push rbp
         mov rbp,rsp
         mov di,[socket]
@@ -262,10 +392,7 @@ socket:
                 dw 0x901f
                 dd 0
                 dq 0
-        .opts:
-                dw 0
-                db 0
-                db 1
+        .opts   dd 1
 ;; Client
 client:
         rw 2
@@ -287,3 +414,27 @@ response:
         .maxlen dd 1024
         .len rd 2
         .path db 'index.html',0
+        .fd rd 2
+        .handle:
+                push rbp
+                mov rbp,rsp
+                ;;Open
+                mov edi,response.path
+                mov esi,O_RDONLY
+                call _open
+                mov [responsefd],eax
+                ;; Read
+                mov edi,[response.fd]
+                mov rsi,response
+                mov edx,[response.maxlen]
+                call _read
+                mov [response.len], eax
+                ;; Write
+                mov edi,[client]
+                mov rsi,response
+                mov edx,[response.len]
+                call _write
+                mov rsp,rbp
+                pop rbp
+                ret
+
